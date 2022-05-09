@@ -1,0 +1,45 @@
+:root {
+    --test-color: white
+}
+
+body {
+    margin: 0px;
+    font-family: 'Black Han Sans', sans-serif;
+}
+/* layout */
+.md-header {
+    height: 100px;
+    background: var(--test-color);
+}
+.md-body {
+    width: 100%;
+    height: calc(100% - 300px);
+    min-height: 300px;
+    
+}
+.md-footer {
+    width: 100%;
+    height: 100px;
+    background: var(--test-color);
+    position: fixed;
+    bottom: 0;
+}
+/* menu */
+.md-menu-box {
+    width: fit-content;
+    display: grid;
+    grid-template-columns: repeat(4, 150px);
+    grid-template-rows: repeat(4, 150px);
+    margin: auto;
+    grid-column-gap: 5px;
+    grid-row-gap: 5px;
+}
+.md-menu-item {
+    border: 1px solid lightgray;
+    border-radius: 10px;
+    padding: 10px;
+    vertical-align: middle;
+    line-height: 130px;
+    text-align: center;
+    font-size: 1.3em;
+}
