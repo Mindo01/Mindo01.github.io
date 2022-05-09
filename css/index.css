@@ -1,26 +1,42 @@
 :root {
-    --test-color: white
+    --test-color: white;
+    --base-color: azure;
+    --font-color: #37383a;
+    --highlight-color: #F55353;
+    --primary-color: #F6F54D;
+    --secondary-color: #FEB139;
+    --dark-color: #143F6B;
 }
 
 body {
     margin: 0px;
     font-family: 'Black Han Sans', sans-serif;
+    color: var(--font-color);
+}
+/* root class */
+.no-selection {
+    -webkit-touch-callout: none; /* iOS Safari */
+    -webkit-user-select: none; /* Safari */
+    -khtml-user-select: none; /* Konqueror HTML */
+    -moz-user-select: none; /* Old versions of Firefox */
+    -ms-user-select: none; /* Internet Explorer/Edge */
+    user-select: none; /* Non-prefixed version, currently
+                                supported by Chrome, Edge, Opera and Firefox */
 }
 /* layout */
 .md-header {
     height: 100px;
-    background: var(--test-color);
+    background-color: var(--base-color);
 }
 .md-body {
     width: 100%;
     height: calc(100% - 300px);
     min-height: 300px;
-    
 }
 .md-footer {
     width: 100%;
     height: 100px;
-    background: var(--test-color);
+    background-color: var(--base-color);
     position: fixed;
     bottom: 0;
 }
@@ -35,11 +51,19 @@ body {
     grid-row-gap: 5px;
 }
 .md-menu-item {
-    border: 1px solid lightgray;
     border-radius: 10px;
     padding: 10px;
     vertical-align: middle;
     line-height: 130px;
     text-align: center;
     font-size: 1.3em;
+    color: white;
+    background-color: var(--dark-color);
+}
+.md-menu-item:hover {
+    background-color: var(--secondary-color);
+    cursor: pointer;
+    transition-property: background-color, color;
+    transition-duration: 0.3s;
+    transition-timing-function: ease-out;
 }

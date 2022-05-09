@@ -13,13 +13,17 @@
         <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&display=swap" rel="stylesheet">
         <!-- Style -->
         <link rel="stylesheet" type="text/css" href="./css/index.css"/>
+        <!-- Additional -->
+        <script type="text/javascript">
+            document.oncontextmenu = function(){return false;}
+        </script>
     </head>
-    <body>
+    <body oncontextmenu="return false" onselectstart="return false" ondragstart="return false" onkeydown="return false">
         <div class="md-header">
         
         </div>
         <div class="md-body">
-            <div class="md-menu-box">
+            <div class="md-menu-box no-selection">
                 <div class="md-menu-item" data-menu="card">
                     카드 내역 정리
                 </div>
