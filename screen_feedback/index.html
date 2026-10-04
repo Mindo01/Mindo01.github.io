@@ -107,6 +107,7 @@
     .issue textarea { min-height:90px; font-size:13px; }
     .add-issue { width:100%; border-style:dashed; font-size:13px; }
     .hint { font-size:12px; color:var(--muted); margin:10px 0; }
+    .hint.warn { color:var(--danger); font-weight:600; }
     .footer { text-align:center; color:var(--muted); font-size:12px; padding:12px 0; }
     .toast { position:fixed; right:24px; bottom:24px; max-width:min(480px,calc(100vw - 32px)); padding:15px 20px; color:#fff; background:#202738; border-radius:12px; box-shadow:0 8px 32px #0002; z-index:30; }
     .toast:empty { display:none; }
@@ -140,7 +141,7 @@
         <div id="resource-list" class="resource-list"></div>
         <div class="toolbar">
           <button id="select-all-resources" type="button" disabled>전체 선택</button>
-          <button id="initialize-resources" class="primary" type="button" disabled>선택한 목록으로 초기화</button>
+          <button id="initialize-resources" class="primary" type="button" disabled>선택한 목록 불러오기</button>
         </div>
         <p id="resource-status" class="save-line" role="status" aria-live="polite">검토 목록을 불러오는 중…</p>
       </section>
@@ -181,13 +182,14 @@
           <input id="import-file" type="file" accept=".json,application/json" hidden>
         </div>
         <small>내보내기는 현재 검토 목록의 가장 최근 이력 한 건만 저장합니다. 지난 이력은 이 브라우저에 남으며, 이전 형식의 피드백 JSON도 불러올 수 있습니다.</small>
+        <p id="export-target" class="hint" role="status" aria-live="polite"></p>
         <p id="save-state" class="save-line" role="status" aria-live="polite">브라우저 임시 보관 준비 중…</p>
       </section>
       <section id="scope-section" class="panel" aria-labelledby="scope-heading">
         <h2 id="scope-heading">현재 구현 범위</h2>
         <div class="note">도식 지도와 시연용 가격·주소를 사용합니다. 앱의 목업 저장 내용은 새로고침하면 초기화됩니다. 이 문서에 작성한 피드백의 임시 보관은 앱 목업 데이터와 별도로 유지됩니다.</div>
         <div class="flow" aria-label="대표 검토 흐름">
-          <a href="#PROP-001">검색·지도</a><span aria-hidden="true">→</span><a href="#PROP-002">필터</a><span aria-hidden="true">→</span><a href="#PROP-004">상세</a><span aria-hidden="true">→</span><a href="#PROP-008">관심</a><span aria-hidden="true">·</span><a href="#PROP-003">저장 조건</a><a href="#PROP-005">가격 이력</a><a href="#PROP-006">직접 등록</a><a href="#PROP-007">신고</a>
+          <a href="#sf:PROP-001">검색·지도</a><span aria-hidden="true">→</span><a href="#sf:PROP-002">필터</a><span aria-hidden="true">→</span><a href="#sf:PROP-004">상세</a><span aria-hidden="true">→</span><a href="#sf:PROP-008">관심</a><span aria-hidden="true">·</span><a href="#sf:PROP-003">저장 조건</a><a href="#sf:PROP-005">가격 이력</a><a href="#sf:PROP-006">직접 등록</a><a href="#sf:PROP-007">신고</a>
         </div>
         <div class="common-grid">
           <div><h3>모든 화면에서 확인할 사항</h3><ul>
@@ -231,12 +233,14 @@
   const PRIORITY = {high:'높음 · 우선 수정', normal:'보통 · 다음 개선', low:'낮음 · 참고'};
   const CATEGORY = {behavior:'기능·동작', ui:'화면·배치', copy:'문구·번역', data:'데이터·가격', accessibility:'접근성·입력', other:'기타'};
   const $ = id => document.getElementById(id);
+  // 화면 id에는 ':'가 없으므로 접두사와 ':' 구분자로 페이지 요소 id·다른 화면 id와 겹치지 않게 합니다.
+  const domId = (screenId,...parts) => ['sf',screenId,...parts].join(':');
   const text = (value, max=20000) => typeof value === 'string' ? value.slice(0,max) : '';
   const choice = (value, options, fallback) => Object.hasOwn(options,value) ? value : fallback;
   const keyOf = list => JSON.stringify([list.feature,list.version]);
   const DEFAULT_LIST = normalizeChecklist(JSON.parse($('default-checklist').textContent));
   const DEFAULT_KEY = keyOf(DEFAULT_LIST);
-  let store, state, SCREENS = [], saveTimer, toastTimer, persistent = true;
+  let store, state, SCREENS = [], saveTimer, toastTimer, persistent = true, persistBlocked = false;
   let selectedScreens = new Set();
   let resourceFiles = [];
 
@@ -268,7 +272,8 @@
     const record = newRecord(list);
     if (!raw || typeof raw!=='object') return record;
     record.id = typeof raw.id==='string' && /^[A-Za-z0-9_-]{1,120}$/.test(raw.id) ? raw.id : uid();
-    for(const key of Object.keys(record.meta)) record.meta[key]=text(raw.meta?.[key],key==='appBase'?2000:300);
+    // 값이 없는 항목(이전 형식의 appBase 등)은 newRecord의 기본값을 유지합니다.
+    for(const key of Object.keys(record.meta)) if(typeof raw.meta?.[key]==='string')record.meta[key]=text(raw.meta[key],key==='appBase'?2000:300);
     if(!/^\d{4}-\d{2}-\d{2}$/.test(record.meta.reviewDate))record.meta.reviewDate=day();
     record.commonNotes=text(raw.commonNotes);
     record.createdAt=typeof raw.createdAt==='string' && Number.isFinite(Date.parse(raw.createdAt)) ? raw.createdAt : new Date().toISOString();
@@ -284,13 +289,15 @@
   function emptyStore() {
     return {schemaVersion:2,documentId:DOCUMENT_ID,checklists:{[DEFAULT_KEY]:DEFAULT_LIST},histories:{[DEFAULT_KEY]:[newRecord(DEFAULT_LIST)]},activeKey:DEFAULT_KEY,activeHistoryId:null};
   }
+  // 반환값의 skipped는 읽지 못해 건너뛴 검토 목록 수입니다. 0보다 크면 원본을 보존한 뒤 저장해야 합니다.
   function loadStore() {
     const base=emptyStore();
+    let skipped=0;
     const saved=localStorage.getItem(STORAGE_KEY);
     if(saved) {
       const raw=JSON.parse(saved);
       if(raw.schemaVersion!==2 || raw.documentId!==DOCUMENT_ID || !raw.checklists || !raw.histories) throw new Error('저장된 검토 기록 형식을 읽을 수 없습니다.');
-      for(const item of Object.values(raw.checklists)) {const list=normalizeChecklist(item);base.checklists[keyOf(list)]=list;}
+      for(const item of Object.values(raw.checklists)) {try {const list=normalizeChecklist(item);base.checklists[keyOf(list)]=list;} catch {skipped++;}}
       for(const [key,items] of Object.entries(raw.histories)) {
         const list=base.checklists[key];
         if(list && Array.isArray(items)) base.histories[key]=items.map(item=>normalizeRecord(item,list));
@@ -298,7 +305,7 @@
       for(const [key,list] of Object.entries(base.checklists)) if(!base.histories[key]?.length)base.histories[key]=[newRecord(list)];
       base.activeKey=Object.hasOwn(base.checklists,raw.activeKey)?raw.activeKey:DEFAULT_KEY;
       base.activeHistoryId=raw.activeHistoryId;
-      return base;
+      return {store:base,skipped};
     }
     const legacy=localStorage.getItem(OLD_STORAGE_KEY);
     if(legacy) {
@@ -306,7 +313,20 @@
       if(raw.schemaVersion!==1 || raw.documentId!==DOCUMENT_ID) throw new Error('이전 검토 기록 형식을 읽을 수 없습니다.');
       base.histories[DEFAULT_KEY]=[normalizeRecord(raw,DEFAULT_LIST)];
     }
-    return base;
+    return {store:base,skipped};
+  }
+  // 읽지 못한 저장 기록을 덮어쓰기 전에 별도 키로 보존합니다. 보존할 수 없으면 자동 저장을 멈춰 원본을 지킵니다.
+  function preserveUnreadable(message) {
+    try {
+      const raw=localStorage.getItem(STORAGE_KEY);
+      if(raw===null)return message;
+      const key=STORAGE_KEY+':recovery-'+Date.now();
+      localStorage.setItem(key,raw);
+      return message+' 원본은 브라우저 저장소의 '+key+' 항목에 보관했습니다.';
+    } catch {
+      persistBlocked=true;
+      return message+' 원본을 보호하기 위해 자동 저장을 멈췄습니다. 필요한 내용은 JSON 백업으로 내려받아주세요.';
+    }
   }
   function listNow() { return store.checklists[store.activeKey]; }
   function recordsNow() { return store.histories[store.activeKey]; }
@@ -327,11 +347,12 @@
   function announce(message) { $('toast').textContent=message;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{$('toast').textContent='';},5500); }
   function persist() {
     clearTimeout(saveTimer);
+    if(persistBlocked){$('save-state').textContent='저장된 원본을 보호하기 위해 자동 저장을 멈췄습니다. 현재 이력을 JSON으로 백업해주세요.';return;}
     try { localStorage.setItem(STORAGE_KEY,JSON.stringify(store));persistent=true; }
     catch { persistent=false; }
     $('save-state').textContent=persistent ? '브라우저에 저장됨 · '+new Date().toLocaleTimeString('ko-KR') : '브라우저 저장을 사용할 수 없습니다. 현재 이력을 JSON으로 백업해주세요.';
   }
-  function change() { state.updatedAt=new Date().toISOString();$('save-state').textContent='작성 내용 저장 중…';clearTimeout(saveTimer);saveTimer=setTimeout(persist,350);updateSummary();updateHistoryLabels(); }
+  function change() { state.updatedAt=new Date().toISOString();$('save-state').textContent='작성 내용 저장 중…';clearTimeout(saveTimer);saveTimer=setTimeout(persist,350);updateSummary(false);updateHistoryLabels(); }
   function el(tag,attrs={},content) {
     const node=document.createElement(tag);
     for(const [key,value] of Object.entries(attrs)) {if(key==='class')node.className=value;else node.setAttribute(key,value);}
@@ -350,21 +371,24 @@
     const remove=el('button',{type:'button',class:'quiet','aria-label':spec.name+' 피드백 '+number+' 삭제'},'삭제');
     remove.addEventListener('click',()=>{if(nonempty(issue)&&!confirm('이 피드백 항목을 삭제할까요?'))return;state.reviews[spec.id].issues=state.reviews[spec.id].issues.filter(item=>item.id!==issue.id);renderIssues(spec);change();});head.append(remove);article.append(head);
     const row=el('div',{class:'row'});
-    for(const [key,label,options]of [['kind','구분',KIND],['priority','우선순위',PRIORITY]]) {const input=select(spec.id+'-'+issue.id+'-'+key,options,issue[key]);input.addEventListener('change',()=>{issue[key]=input.value;change();});row.append(field(label,input));}
+    for(const [key,label,options]of [['kind','구분',KIND],['priority','우선순위',PRIORITY]]) {const input=select(domId(spec.id,'issue',issue.id,key),options,issue[key]);input.addEventListener('change',()=>{issue[key]=input.value;change();});row.append(field(label,input));}
     article.append(row);
-    const category=select(spec.id+'-'+issue.id+'-category',CATEGORY,issue.category);category.addEventListener('change',()=>{issue.category=category.value;change();});article.append(field('대상 영역',category));
+    const category=select(domId(spec.id,'issue',issue.id,'category'),CATEGORY,issue.category);category.addEventListener('change',()=>{issue.category=category.value;change();});article.append(field('대상 영역',category));
     for(const [key,label,placeholder]of [['title','수정 항목 제목','예: 관심 저장 버튼의 선택 상태를 더 명확하게'],['problem','현재 동작·문제·재현 순서','어느 화면에서 무엇을 했고 어떤 결과가 나왔는지 적어주세요.'],['expected','원하는 수정·기대 결과','원하는 배치, 동작, 문구 또는 확인이 필요한 내용을 적어주세요.']]) {
-      const input=el(key==='title'?'input':'textarea',{id:spec.id+'-'+issue.id+'-'+key,placeholder,maxlength:key==='title'?200:20000});input.value=issue[key];input.addEventListener('input',()=>{issue[key]=input.value;change();});article.append(field(label,input));
+      const input=el(key==='title'?'input':'textarea',{id:domId(spec.id,'issue',issue.id,key),placeholder,maxlength:key==='title'?200:20000});input.value=issue[key];input.addEventListener('input',()=>{issue[key]=input.value;change();});article.append(field(label,input));
     }
     return article;
   }
-  function renderIssues(spec) { const list=$('issues-'+spec.id);list.replaceChildren();state.reviews[spec.id].issues.forEach((issue,index)=>list.append(makeIssue(spec,issue,index+1))); }
+  function renderIssues(spec) { const list=$(domId(spec.id,'issues'));list.replaceChildren();state.reviews[spec.id].issues.forEach((issue,index)=>list.append(makeIssue(spec,issue,index+1))); }
   function updateHistoryLabels() {
     const picker=$('history-select');
     const selected=picker.value;
     picker.replaceChildren();
-    recordsNow().forEach((record,index)=>picker.append(el('option',{value:record.id},'검토 '+(index+1)+' · '+(record.meta.reviewDate||day())+' · '+(record.meta.reviewer||'검토자 미작성')));
+    recordsNow().forEach((record,index)=>picker.append(el('option',{value:record.id},'검토 '+(index+1)+' · '+(record.meta.reviewDate||day())+' · '+(record.meta.reviewer||'검토자 미작성'))));
     picker.value=selected || state.id;
+    const latest=latestRecord(),target=$('export-target'),latestIndex=recordsNow().length;
+    target.textContent='내보내기 대상: 검토 '+latestIndex+' · '+(latest.meta.reviewDate||day())+' · '+(latest.meta.reviewer||'검토자 미작성')+' (가장 최근 이력)'+(state===latest?'':' — 지금 보고 있는 검토 '+(recordsNow().indexOf(state)+1)+'은 내보내지지 않습니다.');
+    target.classList.toggle('warn',state!==latest);
   }
   function render() {
     $('screen-nav').replaceChildren();$('screens').replaceChildren();
@@ -383,21 +407,21 @@
       const nav=el('div',{class:'nav-row'});
       const check=el('input',{type:'checkbox','aria-label':spec.name+' 개발 완료 대상으로 선택'});
       check.addEventListener('change',()=>{if(check.checked)selectedScreens.add(spec.id);else selectedScreens.delete(spec.id);updateSelection();});
-      const anchor=el('a',{href:'#'+spec.id});const navName=el('span',{},spec.name);navName.prepend(el('span',{class:'nav-code'},spec.id));anchor.append(navName,el('span',{class:'nav-state',id:'nav-'+spec.id}));nav.append(check,anchor);$('screen-nav').append(nav);
-      const section=el('section',{class:'screen',id:spec.id,'aria-labelledby':'heading-'+spec.id});
-      const head=el('div',{class:'screen-head'}),description=el('div');description.append(el('p',{class:'screen-code'},spec.id),el('h2',{id:'heading-'+spec.id},spec.name),el('p',{class:'screen-purpose'},spec.purpose),el('code',{class:'route'},spec.route));
+      const anchor=el('a',{href:'#'+domId(spec.id)});const navName=el('span',{},spec.name);navName.prepend(el('span',{class:'nav-code'},spec.id));anchor.append(navName,el('span',{class:'nav-state',id:domId(spec.id,'nav')}));nav.append(check,anchor);$('screen-nav').append(nav);
+      const section=el('section',{class:'screen',id:domId(spec.id),'aria-labelledby':domId(spec.id,'heading')});
+      const head=el('div',{class:'screen-head'}),description=el('div');description.append(el('p',{class:'screen-code'},spec.id),el('h2',{id:domId(spec.id,'heading')},spec.name),el('p',{class:'screen-purpose'},spec.purpose),el('code',{class:'route'},spec.route));
       const open=el('a',{class:'open-screen',target:'_blank',rel:'noopener','data-open':spec.id},'앱 화면 열기 ↗');head.append(description,open);section.append(head);
       const body=el('div',{class:'screen-body'}),specColumn=el('div');specColumn.append(el('h3',{},'구현된 기능'));
       for(const [name,detail]of spec.features){const item=el('div',{class:'feature'});item.append(el('strong',{},name),el('p',{},detail));specColumn.append(item);}
       const checks=el('div',{class:'checks'});checks.append(el('h3',{},'확인 순서와 결과'));
-      spec.checks.forEach((checkText,index)=>{const item=el('div',{class:'check','data-result':review.checks[index]});const id=spec.id+'-check-'+index;const input=select(id,RESULT,review.checks[index]);item.append(el('label',{for:id},(index+1)+'. '+checkText),input);input.addEventListener('change',()=>{review.checks[index]=input.value;item.dataset.result=input.value;change();});checks.append(item);});specColumn.append(checks);
+      spec.checks.forEach((checkText,index)=>{const item=el('div',{class:'check','data-result':review.checks[index]});const id=domId(spec.id,'check',index);const input=select(id,RESULT,review.checks[index]);item.append(el('label',{for:id},(index+1)+'. '+checkText),input);input.addEventListener('change',()=>{review.checks[index]=input.value;item.dataset.result=input.value;change();});checks.append(item);});specColumn.append(checks);
       const bounds=el('details');bounds.append(el('summary',{},'구현 경계·검토 시 참고'));const ul=el('ul');for(const note of spec.boundaries)ul.append(el('li',{},note));bounds.append(ul,el('p',{},'구현 파일: '+spec.source));specColumn.append(bounds);
       const reviewColumn=el('div',{class:'review'});reviewColumn.append(el('h3',{},'이 화면의 피드백'));
-      const status=select(spec.id+'-status',STATUS,review.status);status.addEventListener('change',()=>{review.status=status.value;change();});reviewColumn.append(field('화면 검토 상태',status));
-      const notes=el('textarea',{id:spec.id+'-notes',placeholder:'전체 의견, 유지할 부분, 의사결정이 필요한 내용을 적어주세요.',maxlength:20000});notes.value=review.notes;notes.addEventListener('input',()=>{review.notes=notes.value;change();});reviewColumn.append(field('화면 전체 의견',notes));
+      const status=select(domId(spec.id,'status'),STATUS,review.status);status.addEventListener('change',()=>{review.status=status.value;change();});reviewColumn.append(field('화면 검토 상태',status));
+      const notes=el('textarea',{id:domId(spec.id,'notes'),placeholder:'전체 의견, 유지할 부분, 의사결정이 필요한 내용을 적어주세요.',maxlength:20000});notes.value=review.notes;notes.addEventListener('input',()=>{review.notes=notes.value;change();});reviewColumn.append(field('화면 전체 의견',notes));
       reviewColumn.append(el('p',{class:'hint'},'수정할 항목은 아래에 개별로 기록하세요. 여러 항목을 추가할 수 있으며, 내용이 없는 항목은 수정 요청 파일에서 제외됩니다.'));
-      const issueList=el('div',{id:'issues-'+spec.id});reviewColumn.append(issueList);
-      const add=el('button',{type:'button',class:'add-issue'},'+ 피드백 항목 추가');add.addEventListener('click',()=>{if(review.issues.length>=100){announce('화면당 최대 100개까지 기록할 수 있습니다.');return;}const issue=blankIssue();review.issues.push(issue);renderIssues(spec);change();$(spec.id+'-'+issue.id+'-title').focus();});reviewColumn.append(add);
+      const issueList=el('div',{id:domId(spec.id,'issues')});reviewColumn.append(issueList);
+      const add=el('button',{type:'button',class:'add-issue'},'+ 피드백 항목 추가');add.addEventListener('click',()=>{if(review.issues.length>=100){announce('화면당 최대 100개까지 기록할 수 있습니다.');return;}const issue=blankIssue();review.issues.push(issue);renderIssues(spec);change();$(domId(spec.id,'issue',issue.id,'title')).focus();});reviewColumn.append(add);
       body.append(specColumn,reviewColumn);section.append(body);$('screens').append(section);renderIssues(spec);
     }
     $('screen-count').textContent=SCREENS.length;$('review-progress').max=SCREENS.length;
@@ -405,25 +429,32 @@
   }
   function appUrl(spec) { try {const url=new URL(state.meta.appBase);if(!['http:','https:'].includes(url.protocol))return null;return url.origin+url.pathname.replace(/\/$/,'')+spec.example;} catch {return null;} }
   function updateLinks() { for(const spec of SCREENS){const anchor=document.querySelector('[data-open="'+spec.id+'"]');const url=appUrl(spec);if(url){anchor.href=url;anchor.removeAttribute('aria-disabled');}else{anchor.removeAttribute('href');anchor.setAttribute('aria-disabled','true');}} }
+  function searchText(spec) { return [spec.id,spec.name,spec.route,spec.example,spec.source,spec.purpose,...spec.features.flat(),...spec.checks,...spec.boundaries].join('\n').toLocaleLowerCase(); }
   function filterScreens() {
     const query=$('screen-search').value.trim().toLocaleLowerCase(),mode=$('screen-filter').value;let visible=0;
-    for(const spec of SCREENS){const review=state.reviews[spec.id];const match=JSON.stringify(spec).toLocaleLowerCase().includes(query);const statusMatch=mode==='all'||mode==='requests'&&needsReview(review)||mode==='unreviewed'&&['pending','hold'].includes(review.status)||mode==='reviewed'&&['approved','revision','developed'].includes(review.status);$(spec.id).hidden=!(match&&statusMatch);if(!$(spec.id).hidden)visible++;}
+    for(const spec of SCREENS){const review=state.reviews[spec.id];const match=searchText(spec).includes(query);const statusMatch=mode==='all'||mode==='requests'&&needsReview(review)||mode==='unreviewed'&&['pending','hold'].includes(review.status)||mode==='reviewed'&&['approved','revision','developed'].includes(review.status);const section=$(domId(spec.id));section.hidden=!(match&&statusMatch);if(!section.hidden)visible++;}
     $('no-results').style.display=visible?'none':'block';
   }
-  function updateSummary() {
+  // 작성 중에는 refilter=false로 호출해 편집하던 화면 카드가 필터 조건 때문에 사라지지 않게 합니다.
+  function updateSummary(refilter=true) {
     let reviewed=0,requestTotal=0,flagTotal=0;
-    for(const spec of SCREENS){const review=state.reviews[spec.id];if(['approved','revision','developed'].includes(review.status))reviewed++;if(review.status!=='developed'){requestTotal+=requests(review).length;flagTotal+=flags(review);}const badge=$('nav-'+spec.id);if(badge){const count=requestCount(review);badge.textContent=count?'수정 '+count:STATUS[review.status];badge.style.color=count?'var(--danger)':['approved','developed'].includes(review.status)?'var(--success)':'var(--muted)';}}
-    $('reviewed-count').textContent=reviewed;$('request-count').textContent=requestTotal;$('flag-count').textContent=flagTotal;$('review-progress').value=reviewed;filterScreens();
+    for(const spec of SCREENS){const review=state.reviews[spec.id];if(['approved','revision','developed'].includes(review.status))reviewed++;if(review.status!=='developed'){requestTotal+=requests(review).length;flagTotal+=flags(review);}const badge=$(domId(spec.id,'nav'));if(badge){const count=requestCount(review);badge.textContent=count?'수정 '+count:STATUS[review.status];badge.style.color=count?'var(--danger)':['approved','developed'].includes(review.status)?'var(--success)':'var(--muted)';}}
+    $('reviewed-count').textContent=reviewed;$('request-count').textContent=requestTotal;$('flag-count').textContent=flagTotal;$('review-progress').value=reviewed;if(refilter)filterScreens();
   }
   function rebaseRecord(record,oldList,newList) {
     const oldScreens=new Map(oldList.screens.map(spec=>[spec.id,spec]));
+    const reviews={};
     for(const spec of newList.screens){
       const previous=oldScreens.get(spec.id);
       const review=record.reviews[spec.id];
-      if(!previous || !review){record.reviews[spec.id]=blankReview(spec);continue;}
-      const byText=new Map(previous.checks.map((item,index)=>[item,review.checks[index]]));
-      review.checks=spec.checks.map(item=>choice(byText.get(item),RESULT,'pending'));
+      if(!previous || !review){reviews[spec.id]=blankReview(spec);continue;}
+      // 같은 문구의 확인 항목이 여러 개면 순서대로 결과를 이어받습니다.
+      const byText=new Map();
+      previous.checks.forEach((item,index)=>{if(!byText.has(item))byText.set(item,[]);byText.get(item).push(review.checks[index]);});
+      review.checks=spec.checks.map(item=>choice(byText.get(item)?.shift(),RESULT,'pending'));
+      reviews[spec.id]=review;
     }
+    record.reviews=reviews;
     record.feature=newList.feature;record.version=newList.version;
   }
   function quote(value) {return (value.trim()||'미작성').split(/\r?\n/).map(line=>'> '+line).join('\n');}
@@ -450,17 +481,27 @@
     const keys=new Set(lists.map(keyOf));
     if(keys.size!==lists.length)throw new Error('선택한 JSON에 같은 feature·version 조합이 중복되어 있습니다.');
     const changed=lists.filter(list=>Object.hasOwn(store.checklists,keyOf(list))&&JSON.stringify(store.checklists[keyOf(list)])!==JSON.stringify(list));
-    if(changed.length&&!confirm(changed.map(list=>list.feature+' · '+list.version).join(', ')+' 검토 목록을 덮어쓸까요? 같은 문구의 확인 결과와 검토 이력은 유지됩니다.'))return false;
+    const removed=changed.flatMap(list=>{const ids=new Set(list.screens.map(spec=>spec.id));return store.checklists[keyOf(list)].screens.filter(spec=>!ids.has(spec.id)).map(spec=>spec.id);});
+    if(changed.length&&!confirm(changed.map(list=>list.feature+' · '+list.version).join(', ')+' 검토 목록을 덮어쓸까요? 같은 문구의 확인 결과와 검토 이력은 유지됩니다.'+(removed.length?' 목록에서 빠지는 화면('+removed.join(', ')+')의 피드백은 삭제됩니다.':'')))return false;
     persist();
+    const summary={added:0,updated:0,unchanged:0};
     for(const list of lists){
       const key=keyOf(list),previous=store.checklists[key];
-      if(previous&&JSON.stringify(previous)!==JSON.stringify(list))for(const record of store.histories[key])rebaseRecord(record,previous,list);
+      if(!previous)summary.added++;
+      else if(JSON.stringify(previous)!==JSON.stringify(list)){summary.updated++;for(const record of store.histories[key])rebaseRecord(record,previous,list);}
+      else summary.unchanged++;
       store.checklists[key]=list;
       if(!store.histories[key]?.length)store.histories[key]=[newRecord(list)];
     }
-    store.activeKey=keyOf(lists[0]);store.activeHistoryId=store.histories[store.activeKey].at(-1).id;
+    const nextKey=keyOf(lists[0]);
+    // 보고 있던 목록을 다시 불러오면 선택한 이력을 유지하고, 다른 목록으로 바뀔 때만 최근 이력을 엽니다.
+    if(store.activeKey!==nextKey){store.activeKey=nextKey;store.activeHistoryId=store.histories[nextKey].at(-1).id;}
     selectRecord();
-    return true;
+    return summary;
+  }
+  function describeApply(summary) {
+    if(!summary.added&&!summary.updated)return '선택한 '+summary.unchanged+'개 검토 목록이 이미 최신입니다. 변경 사항이 없습니다.';
+    return [summary.added&&'추가 '+summary.added+'개',summary.updated&&'갱신 '+summary.updated+'개',summary.unchanged&&'변경 없음 '+summary.unchanged+'개'].filter(Boolean).join(' · ')+' 검토 목록을 불러왔습니다.';
   }
   function selectedResources() {return [...$('resource-list').querySelectorAll('input[type="checkbox"]:checked')].map(input=>resourceFiles[Number(input.value)]);}
   function updateResourceSelection() {
@@ -500,7 +541,11 @@
     if(item.data)return item.data;
     const response=await fetch('./resources/'+encodeURIComponent(item.file),{cache:'no-store'});
     if(!response.ok)throw new Error(item.file+' 파일을 읽을 수 없습니다.');
-    return normalizeChecklist(JSON.parse((await response.text()).replace(/^\uFEFF/,'')));
+    let raw;
+    try {raw=JSON.parse((await response.text()).replace(/^\uFEFF/,''));}
+    catch {throw new Error(item.file+' JSON 파일 형식을 확인해주세요.');}
+    try {return normalizeChecklist(raw);}
+    catch(error) {throw new Error(item.file+': '+error.message);}
   }
   $('select-all-resources').addEventListener('click',()=>{
     for(const input of $('resource-list').querySelectorAll('input[type="checkbox"]'))input.checked=true;
@@ -511,9 +556,10 @@
     $('initialize-resources').disabled=true;$('resource-status').textContent='선택한 JSON을 읽는 중…';
     try {
       const lists=await Promise.all(selected.map(readResource));
-      if(applyChecklists(lists)){
-        $('resource-status').textContent=lists.length+'개 검토 목록을 불러왔습니다.';
-        announce('선택한 검토 목록을 브라우저에 저장했습니다.');
+      const summary=applyChecklists(lists);
+      if(summary){
+        $('resource-status').textContent=describeApply(summary);
+        announce($('resource-status').textContent);
       } else $('resource-status').textContent='검토 목록 변경을 취소했습니다.';
     } catch(error){$('resource-status').textContent=error.message||'검토 목록을 읽지 못했습니다.';announce($('resource-status').textContent);}
     finally{updateResourceSelection();}
@@ -523,7 +569,7 @@
   $('screen-search').addEventListener('input',filterScreens);$('screen-filter').addEventListener('change',filterScreens);
   $('complete-selected').addEventListener('click',()=>{
     if(!selectedScreens.size)return;
-    for(const id of selectedScreens){state.reviews[id].status='developed';$(id+'-status').value='developed';}
+    for(const id of selectedScreens){state.reviews[id].status='developed';$(domId(id,'status')).value='developed';}
     selectedScreens.clear();for(const input of $('screen-nav').querySelectorAll('input[type="checkbox"]'))input.checked=false;
     updateSelection();change();announce('선택한 화면을 개발 완료로 표시했습니다.');
   });
@@ -536,7 +582,7 @@
     try {
       if(files.some(file=>file.size>5*1024*1024))throw new Error('각 검토 목록 JSON은 5MB 이하로 준비해주세요.');
       const lists=await Promise.all(files.map(async file=>normalizeChecklist(JSON.parse((await file.text()).replace(/^\uFEFF/,'')))));
-      if(applyChecklists(lists))announce(lists.length+'개 검토 목록을 추가·업데이트했습니다.');
+      const summary=applyChecklists(lists);if(summary)announce(describeApply(summary));
     } catch(error){announce(error instanceof SyntaxError?'JSON 파일 형식을 확인해주세요.':error.message);}
     finally{event.target.value='';}
   });
@@ -575,8 +621,10 @@
   window.addEventListener('pagehide',persist);
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')persist();});
   let restoreProblem='';
-  try {store=loadStore();}
-  catch {store=emptyStore();restoreProblem='브라우저에 저장된 검토 기록을 읽지 못했습니다. JSON 백업을 불러올 수 있습니다.';}
+  try {
+    const loaded=loadStore();store=loaded.store;
+    if(loaded.skipped)restoreProblem=preserveUnreadable('저장된 검토 목록 '+loaded.skipped+'개를 읽지 못해 제외했습니다.');
+  } catch {store=emptyStore();restoreProblem=preserveUnreadable('브라우저에 저장된 검토 기록을 읽지 못했습니다. JSON 백업을 불러올 수 있습니다.');}
   selectRecord();void loadResources();if(restoreProblem)announce(restoreProblem);
 
   </script>
